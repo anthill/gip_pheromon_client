@@ -44,7 +44,7 @@ function startMeasurements(bunching_period) {
     setInterval(function(){
         var r = Math.floor((Math.random() * 100) + 1);
         seismic_sensor.emit("measurement", r);
-    });
+    }, 10000);
 }
 
 // MQTT BLOCK
