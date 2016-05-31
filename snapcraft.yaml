@@ -1,0 +1,16 @@
+name: gip_pheromon_client
+version: 1
+summary: a nodejs app to send data
+description: Blalabalabe
+confinement: strict
+
+apps:
+  webchat:
+    command: bin/gip_pheromon_client
+    daemon: simple
+    plugs: [network-bind]
+
+parts:
+  webchat:
+    plugin: nodejs
+    source: .
