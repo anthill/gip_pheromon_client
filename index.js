@@ -100,7 +100,11 @@ wifi.on('monitorError', function () {
 
 wifi.on('processed', function (results) {
     console.log('wifi measurements received');
-    send('measurement/'+id+'/measurement', results.devices.length, {qos: 1});
+    var payload = JSON.stringify([{
+        value: results.devices.length,
+        date: new Date().toISOString()
+    }]);
+    send('measurement/'+id+'/measurement', payload, {qos: 1});
 });
 
 wifi.on('transition', function (status){
