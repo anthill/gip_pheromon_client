@@ -15,7 +15,8 @@
   "dependencies": {
     "6sense": "^1.1.2",
     "es6-promise": "~2.3.0",
-    "mqtt": "1.6.1"
+    "mqtt": "1.6.1",
+    "node-schedule": "^1.1.0"
   },
   "bugs": {
     "url": "https://github.com/anthill/gip_pheromon_client/issues"
