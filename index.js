@@ -37,7 +37,6 @@ var debug = function() {
 function restart6senseIfNeeded() {
     return new Promise(function (resolve) {
         wifi.pause();
-        bluetooth.pause();
         setTimeout(function(){
             var date = new Date();
             var current_hour = date.getHours();
@@ -45,7 +44,6 @@ function restart6senseIfNeeded() {
             if (current_hour < parseInt(SLEEP_HOUR_UTC, 10) && current_hour >= parseInt(WAKEUP_HOUR_UTC, 10)) {
                 debug('Restarting measurements.');
                 wifi.record(MEASURE_PERIOD);
-                bluetooth.record(MEASURE_PERIOD);
             }
 
             resolve();
@@ -57,7 +55,6 @@ function createStartJob() {
     return schedule.scheduleJob('00 ' + WAKEUP_HOUR_UTC + ' * * *', function(){
         console.log('Restarting measurements.');
         wifi.record(MEASURE_PERIOD);
-        bluetooth.record(MEASURE_PERIOD);
     });
 }
 
@@ -65,7 +62,6 @@ function createStopJob() {
     return schedule.scheduleJob('00 '+ SLEEP_HOUR_UTC + ' * * *', function(){
         console.log('Pausing measurements.');
         wifi.pause();
-        bluetooth.pause();
     });
 }
 
@@ -274,7 +270,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                             console.log('Restarting measurements.');
 
                             wifi.record(MEASURE_PERIOD);
-                            bluetooth.record(MEASURE_PERIOD);
+
                         });
                     }
                     else
@@ -297,7 +293,6 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                             console.log('Pausing measurements.');
 
                             wifi.pause();
-                            bluetooth.pause();
                         });
                     }
                     else
