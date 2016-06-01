@@ -4,21 +4,23 @@ var mqtt = require('mqtt');
 var spawn = require('child_process').spawn;
 var fs = require('fs');
 
+var wifi = require('6sense').wifi();
+
 var PRIVATE = require('./PRIVATE/common.json');
 var id = require('./PRIVATE/id.json').id;
 
 
 // === to set ===
-var MEASURE_PERIOD = 5000; // in seconds
+var MEASURE_PERIOD = 300; // in seconds
+var WAKEUP_HOUR_UTC = '07';
+var SLEEP_HOUR_UTC = '22';
 var SSH_TIMEOUT = 20 * 1000;
 // ===
 
 var sshProcess;
 var client;
-var dataBunch = [];
 var inited = false;
-var events = require('events');
-var seismic_sensor = new events.EventEmitter();
+
 
 // Debug logger
 var DEBUG = process.env.DEBUG || false;
@@ -29,23 +31,84 @@ var debug = function() {
     }
 };
 
-// call to sensor pusher
-seismic_sensor.on('measurement', function(message){
-    console.log("sending ", message)
-    var payload = JSON.stringify([{
-        value: message,
-        date: new Date().toISOString()
-    }]);
-    send('measurement/'+id+'/measurement', payload, {qos: 1});
+// Restart 6sense processes if the date is in the range.
+function restart6senseIfNeeded() {
+    return new Promise(function (resolve) {
+        wifi.pause();
+        bluetooth.pause();
+        setTimeout(function(){
+            var date = new Date();
+            var current_hour = date.getHours();
+
+            if (current_hour < parseInt(SLEEP_HOUR_UTC, 10) && current_hour >= parseInt(WAKEUP_HOUR_UTC, 10)) {
+                debug('Restarting measurements.');
+                wifi.record(MEASURE_PERIOD);
+                bluetooth.record(MEASURE_PERIOD);
+            }
+
+            resolve();
+        }, 3000);
+    });
+}
+
+function createStartJob() {
+    return schedule.scheduleJob('00 ' + WAKEUP_HOUR_UTC + ' * * *', function(){
+        console.log('Restarting measurements.');
+        wifi.record(MEASURE_PERIOD);
+        bluetooth.record(MEASURE_PERIOD);
+    });
+}
+
+function createStopJob() {
+    return schedule.scheduleJob('00 '+ SLEEP_HOUR_UTC + ' * * *', function(){
+        console.log('Pausing measurements.');
+        wifi.pause();
+        bluetooth.pause();
+    });
+}
+
+function openTunnel(queenPort, antPort, target) {
+            
+    return new Promise(function(resolve, reject){
+        var myProcess = spawn("ssh", ["-v", "-N", "-o", "StrictHostKeyChecking=no", "-R", queenPort + ":localhost:" + antPort, target]);
+        debug("nodeprocess :", myProcess.pid, "myProcess: ", process.pid);
+        myProcess.stderr.on("data", function(chunkBuffer){
+            var message = chunkBuffer.toString();
+            debug("ssh stderr => " + message);
+            if (message.indexOf("remote forward success") !== -1){
+                resolve(myProcess);
+            } else if (message.indexOf("Warning: remote port forwarding failed for listen port") !== -1){
+                reject({process: myProcess, msg:"Port already in use."});
+            }
+        });
+        // if no error after SSH_TIMEOUT 
+        setTimeout(function(){reject({process: myProcess, msg:"SSH timeout"}); }, SSH_TIMEOUT);
+    });
+
+}
+
+// restart measurements at WAKEUP_HOUR_UTC
+startJob = createStartJob();
+
+// stop measurements at SLEEP_HOUR_UTC
+stopJob = createStopJob();
+
+
+// 6SENSE WIFI BLOCK
+
+wifi.on('monitorError', function () {
+    console.log("ERROR on wifi detection");
 });
 
-function startMeasurements(bunching_period) {
+wifi.on('processed', function (results) {
+    console.log('wifi measurements received');
+    send('measurement/'+id+'/measurement', results.devices.length, {qos: 1});
+});
 
-    setInterval(function(){
-        var r = Math.floor((Math.random() * 100) + 1);
-        seismic_sensor.emit("measurement", r);
-    }, 10000);
-}
+wifi.on('transition', function (status){
+    send('status/'+id+'/wifi', status.toState);
+    debug('wifi status sent :', status.toState);
+});
 
 // MQTT BLOCK
 
@@ -143,7 +206,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
             // command with no parameter
             switch(command) {
                 case 'status':               // Send statuses
-                    // send('status/'+id+'/wifi', wifi.state);
+                    send('status/'+id+'/wifi', wifi.state);
                     sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
                     break;
                 case 'reboot':               // Reboot the system
@@ -153,13 +216,11 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                     }, 1000);
                     break;
                 case 'resumerecord':         // Start recording
-                    if (sensorPusher)
-                        startMeasurements(MEASURE_PERIOD);
+                    wifi.record(MEASURE_PERIOD);
                     sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
                     break;
                 case 'pauserecord':          // Pause recording
-                    if (sensorPusher)
-                        sensorPusher.kill('SIGINT');
+                    wifi.pause();
                     sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
                     break;
                 case 'closetunnel':          // Close the SSH tunnel
@@ -182,25 +243,63 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                     if (commandArgs[1].toString().match(/^\d{1,5}$/)) {
                         MEASURE_PERIOD = parseInt(commandArgs[1], 10);
 
-                        // TODO: restart measures
-                        sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                        restart6senseIfNeeded()
+                        .then(function () {
+                            sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                        })
+                        .catch(function (err) {
+                            console.log('Error in restart6senseIfNeeded :', err);
+                        });
 
                     } else {
                         console.log('Period is not an integer ', commandArgs[1]);
                         sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
                     }
-                    break;
-                case 'date':                 // Change the sensor's date
-                    var date = commandArgs[1].replace('t', ' ').split('.')[0];
+                case 'changestarttime':      // Change the hour when it starts recording
+                    if (commandArgs[1].match(/^\d{1,2}$/)) {
+                        WAKEUP_HOUR_UTC = commandArgs[1];
 
-                    changeDate()
-                    .then(function () {
-                        sendFunction(topic, JSON.stringify({command: command, result: date}));
-                    })
-                    .catch(function (err) {
-                        sendFunction(topic, JSON.stringify({command: command, result: err}));
-                        console.log('Error in changeDate :', err);
-                    });
+                        restart6senseIfNeeded()
+                        .then(function () {
+                            sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                        })
+                        .catch(function (err) {
+                            console.log('Error in restart6senseIfNeeded :', err);
+                        });
+
+                        startJob.cancel();
+                        startJob = schedule.scheduleJob('00 ' + WAKEUP_HOUR_UTC + ' * * *', function(){
+                            console.log('Restarting measurements.');
+
+                            wifi.record(MEASURE_PERIOD);
+                            bluetooth.record(MEASURE_PERIOD);
+                        });
+                    }
+                    else
+                        sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
+                    break;
+                case 'changestoptime':       // Change the hour when it stops recording
+                    if (commandArgs[1].match(/^\d{1,2}$/)) {
+                        SLEEP_HOUR_UTC = commandArgs[1];
+
+                        restart6senseIfNeeded()
+                        .then(function () {
+                            sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                        })
+                        .catch(function (err) {
+                            console.log('Error in restart6senseIfNeeded :', err);
+                        });
+
+                        stopJob.cancel();
+                        stopJob = schedule.scheduleJob('00 '+ SLEEP_HOUR_UTC + ' * * *', function(){
+                            console.log('Pausing measurements.');
+
+                            wifi.pause();
+                            bluetooth.pause();
+                        });
+                    }
+                    else
+                        sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
                     break;
             }
             break;
@@ -245,11 +344,37 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                         send('cmdResult/'+id, JSON.stringify({command: 'opentunnel', result: 'Error : '+err.msg}));
                     });
                     break;
+
+                case 'init':                 // Initialize period, start and stop time
+                    if (commandArgs[1].match(/^\d{1,5}$/) && commandArgs[2].match(/^\d{1,2}$/) && commandArgs[3].match(/^\d{1,2}$/)) {
+
+                        MEASURE_PERIOD = parseInt(commandArgs[1], 10);
+                        WAKEUP_HOUR_UTC = commandArgs[2];
+                        SLEEP_HOUR_UTC = commandArgs[3];
+                        
+                        restart6senseIfNeeded()
+                        .then(function(){
+                            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+                            debug('init done');
+                        })
+                        .catch(function(){
+                            sendFunction(topic, JSON.stringify({command: command, result: 'Error in restarting 6sense'}));
+                        });
+
+                    }
+                    else {
+                        sendFunction(topic, JSON.stringify({command: command, result: 'Error in arguments'}));
+                        console.log('error in arguments of init');
+                    }
+                    break;
             }
+            break;
 
         default:
             console.log('Unrecognized command.', commandArgs);
             break;
+
+
     }
 }
 

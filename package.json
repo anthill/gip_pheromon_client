@@ -13,6 +13,7 @@
   "author": "ants",
   "license": "MIT",
   "dependencies": {
+    "6sense": "^1.1.2",
     "es6-promise": "~2.3.0",
     "mqtt": "1.6.1"
   },
