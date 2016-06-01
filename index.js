@@ -2,6 +2,7 @@
 
 var mqtt = require('mqtt');
 var spawn = require('child_process').spawn;
+var schedule = require('node-schedule');
 var fs = require('fs');
 
 var wifi = require('6sense').wifi();
@@ -20,7 +21,8 @@ var SSH_TIMEOUT = 20 * 1000;
 var sshProcess;
 var client;
 var inited = false;
-
+var startJob;
+var stopJob;
 
 // Debug logger
 var DEBUG = process.env.DEBUG || false;
@@ -300,30 +302,6 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                     }
                     else
                         sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
-                    break;
-            }
-            break;
-        case 3:
-            switch(command){
-                case 'init':                 // Initialize period, start and stop time
-                    if (commandArgs[1].match(/^\d{1,5}$/)) {
-
-                        var date = commandArgs[2].replace('t', ' ').split('.')[0];
-                        try {
-                            spawn('timedatectl', ['set-time', date]);
-                        } catch (err) {
-                            console.log("Cannot change time :", err)
-                        }
-
-                        MEASURE_PERIOD = parseInt(commandArgs[1], 10);
-                        startMeasurements(MEASURE_PERIOD);
-                        sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
-
-                    }
-                    else {
-                        sendFunction(topic, JSON.stringify({command: command, result: 'Error in arguments'}));
-                        console.log('error in arguments of init');
-                    }
                     break;
             }
             break;
