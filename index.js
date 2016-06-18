@@ -215,8 +215,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                  result += data.toString();
             });
             command.on('close', function(code) {
-                console.log(result)
-                // return resolve(result);
+                return resolve(result);
             });
             command.on('error', function(err) {
                 return reject(err);
