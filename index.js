@@ -104,6 +104,9 @@ wifi.on('processed', function (results) {
         value: results.devices.length,
         date: new Date().toISOString()
     }]);
+    fs.appendFile(__dirname + '/measurements.json', payload, function (err) {
+        console.log("Couldn't write to file. ", err)
+    });
     send('measurement/'+id+'/measurement', payload, {qos: 1});
 });
 
