@@ -42,7 +42,7 @@ function restart6senseIfNeeded() {
             var current_hour = date.getHours();
 
             if (current_hour < parseInt(SLEEP_HOUR_UTC, 10) && current_hour >= parseInt(WAKEUP_HOUR_UTC, 10)) {
-                debug('Restarting measurements.');
+                console.log('Restarting measurements.');
                 wifi.record(MEASURE_PERIOD);
             }
 
@@ -99,13 +99,13 @@ wifi.on('monitorError', function () {
 });
 
 wifi.on('processed', function (results) {
-    console.log('wifi measurements received');
+    console.log('wifi measurements received', results.devices.length);
     var payload = JSON.stringify([{
         value: results.devices.length,
         date: new Date().toISOString()
     }]);
-    fs.appendFile(__dirname + '/measurements.json', payload, function (err) {
-        console.log("Couldn't write to file. ", err)
+    fs.appendFile(__dirname + '/measurements.json', payload, function (res) {
+        console.log("measurements written to file ");
     });
     send('measurement/'+id+'/measurement', payload, {qos: 1});
 });
@@ -137,7 +137,7 @@ function mqttConnect() {
             password: PRIVATE.mqttToken,
             clientId: id,
             keepalive: 10,
-            clean: false,
+            clean: false, // ensures we get the missed messages
             reconnectPeriod: 1000 * 60 * 1
         }
     );
@@ -207,183 +207,176 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
     debug('command received : ' + command);
     debug("args :", commandArgs);
 
-    if (command == "execute"){
-        new Promise(function(resolve, reject){
-            var result = "";
-            var command = spawn(commandArgs[1], commandArgs.slice(2, commandArgs.length));
-            command.stdout.on('data', function(data) {
-                 result += data.toString();
+    switch(command){
+
+        case 'status':               // Send statuses
+            send('status/'+id+'/wifi', wifi.state);
+            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+            break;
+
+        case 'reboot':               // Reboot the system
+            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+            setTimeout(function () {
+                spawn('reboot');
+            }, 1000);
+            break;
+
+        case "execute":
+            new Promise(function(resolve, reject){
+                var result = "";
+                var command = spawn(commandArgs[1], commandArgs.slice(2, commandArgs.length));
+                command.stdout.on('data', function(data) {
+                     result += data.toString();
+                });
+                command.on('close', function(code) {
+                    return resolve(result);
+                });
+                command.on('error', function(err) {
+                    return reject(err);
+                });
+            }).then(function(result){
+                sendFunction(topic, JSON.stringify({command: command, result: result}));
+            }).catch(function(err){
+                sendFunction(topic, JSON.stringify({command: command, result: err}));
             });
-            command.on('close', function(code) {
-                return resolve(result);
-            });
-            command.on('error', function(err) {
-                return reject(err);
-            });
-        }).then(function(result){
-            sendFunction(topic, JSON.stringify({command: command, result: result}));
-        }).catch(function(err){
-            sendFunction(topic, JSON.stringify({command: command, result: err}));
-        });
-    } else {
+            break;       
+        case 'resumerecord':         // Start recording
+            wifi.record(MEASURE_PERIOD);
+            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+            break;
+        case 'pauserecord':          // Pause recording
+            wifi.pause();
+            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+            break;
+        case 'closetunnel':          // Close the SSH tunnel
+            if (sshProcess)
+                sshProcess.kill('SIGINT');
+            setTimeout(function () {
+                if (sshProcess)
+                    sshProcess.kill();
+            }, 2000);
+            send('cmdResult/'+id, JSON.stringify({command: 'closetunnel', result: 'OK'}));
+            send('status/'+id+'/client', 'connected');
+            break;
 
-        switch(commandArgs.length) {
+        case 'changeperiod':
+            if (commandArgs.length > 0 && commandArgs[1].toString().match(/^\d{1,5}$/)) {
+                MEASURE_PERIOD = parseInt(commandArgs[1], 10);
 
-            case 1:
-                // command with no parameter
-                switch(command) {
-                    case 'status':               // Send statuses
-                        send('status/'+id+'/wifi', wifi.state);
-                        sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
-                        break;
-                    case 'reboot':               // Reboot the system
-                        sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
-                        setTimeout(function () {
-                            spawn('reboot');
-                        }, 1000);
-                        break;
-                    case 'resumerecord':         // Start recording
-                        wifi.record(MEASURE_PERIOD);
-                        sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
-                        break;
-                    case 'pauserecord':          // Pause recording
-                        wifi.pause();
-                        sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
-                        break;
-                    case 'closetunnel':          // Close the SSH tunnel
-                        if (sshProcess)
-                            sshProcess.kill('SIGINT');
-                        setTimeout(function () {
-                            if (sshProcess)
-                                sshProcess.kill();
-                        }, 2000);
-                        send('cmdResult/'+id, JSON.stringify({command: 'closetunnel', result: 'OK'}));
-                        send('status/'+id+'/client', 'connected');
-                        break;
+                restart6senseIfNeeded()
+                .then(function () {
+                    sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                })
+                .catch(function (err) {
+                    console.log('Error in restart6senseIfNeeded :', err);
+                });
+
+            } else {
+                console.log('Problem changeperiod ', commandArgs);
+                sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
+            }
+            break;
+        case 'changestarttime':      // Change the hour when it starts recording
+            if (commandArgs.length > 0 && commandArgs[1].match(/^\d{1,2}$/)) {
+                WAKEUP_HOUR_UTC = commandArgs[1];
+
+                restart6senseIfNeeded()
+                .then(function () {
+                    sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                })
+                .catch(function (err) {
+                    console.log('Error in restart6senseIfNeeded :', err);
+                });
+
+                startJob.cancel();
+                startJob = schedule.scheduleJob('00 ' + WAKEUP_HOUR_UTC + ' * * *', function(){
+                    console.log('Restarting measurements.');
+
+                    wifi.record(MEASURE_PERIOD);
+
+                });
+            }
+            else {
+                console.log('Problem changestarttime', commandArgs);
+                sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
+            }
+            break;
+        case 'changestoptime':       // Change the hour when it stops recording
+            if (commandArgs.length > 0 && commandArgs[1].match(/^\d{1,2}$/)) {
+                SLEEP_HOUR_UTC = commandArgs[1];
+
+                restart6senseIfNeeded()
+                .then(function () {
+                    sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                })
+                .catch(function (err) {
+                    console.log('Error in restart6senseIfNeeded :', err);
+                });
+
+                stopJob.cancel();
+                stopJob = schedule.scheduleJob('00 '+ SLEEP_HOUR_UTC + ' * * *', function(){
+                    console.log('Pausing measurements.');
+
+                    wifi.pause();
+                });
+            }
+            else {
+                console.log('Problem changestoptime', commandArgs);
+                sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
+            }
+            break;
+
+        case 'opentunnel':           // Open a reverse SSH tunnel
+            if (commandArgs.length > 3) {
+                openTunnel(commandArgs[1], commandArgs[2], commandArgs[3])
+                .then(function(process){
+                    sshProcess = process;
+                    send('cmdResult/'+id, JSON.stringify({command: 'opentunnel', result: 'OK'}));
+                    send('status/'+id+'/client', 'tunnelling');
+                })
+                .catch(function(err){
+                    console.log(err.msg);
+                    console.log("Could not make the tunnel. Cleanning...");
+                    send('cmdResult/'+id, JSON.stringify({command: 'opentunnel', result: 'Error : '+err.msg}));
+                });
+            }
+            else {
+                console.log('Problem opentunnel', commandArgs);
+                sendFunction(topic, JSON.stringify({command: command, result: 'Error with args'}));
+            }
+            break;
+
+        case 'init':                 // Initialize period, start and stop time
+            if (commandArgs.length > 3 && commandArgs[1].match(/^\d{1,5}$/) && commandArgs[2].match(/^\d{1,2}$/) && commandArgs[3].match(/^\d{1,2}$/)) {
+
+                MEASURE_PERIOD = parseInt(commandArgs[1], 10);
+                WAKEUP_HOUR_UTC = commandArgs[2];
+                SLEEP_HOUR_UTC = commandArgs[3];
+                if (commandArgs.length > 4) {
+                    var newDate = commandArgs[4].toUpperCase().replace('T', ' ').split('.')[0];
+                    spawn('date', ['-s', newDate]);
                 }
-                break;
+                
+                restart6senseIfNeeded()
+                .then(function(){
+                    sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+                    debug('init done');
+                })
+                .catch(function(){
+                    sendFunction(topic, JSON.stringify({command: command, result: 'Error in restarting 6sense'}));
+                });
 
-            case 2:
-                // command with one parameters
-                switch(command) {
-                    case 'changeperiod':
-                        if (commandArgs[1].toString().match(/^\d{1,5}$/)) {
-                            MEASURE_PERIOD = parseInt(commandArgs[1], 10);
+            }
+            else {
+                sendFunction(topic, JSON.stringify({command: command, result: 'Error in arguments'}));
+                console.log('error in arguments of init');
+            }
+            break;
 
-                            restart6senseIfNeeded()
-                            .then(function () {
-                                sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
-                            })
-                            .catch(function (err) {
-                                console.log('Error in restart6senseIfNeeded :', err);
-                            });
+        default:
+            console.log('Unrecognized command.', commandArgs);
+            break;
 
-                        } else {
-                            console.log('Period is not an integer ', commandArgs[1]);
-                            sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
-                        }
-                    case 'changestarttime':      // Change the hour when it starts recording
-                        if (commandArgs[1].match(/^\d{1,2}$/)) {
-                            WAKEUP_HOUR_UTC = commandArgs[1];
-
-                            restart6senseIfNeeded()
-                            .then(function () {
-                                sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
-                            })
-                            .catch(function (err) {
-                                console.log('Error in restart6senseIfNeeded :', err);
-                            });
-
-                            startJob.cancel();
-                            startJob = schedule.scheduleJob('00 ' + WAKEUP_HOUR_UTC + ' * * *', function(){
-                                console.log('Restarting measurements.');
-
-                                wifi.record(MEASURE_PERIOD);
-
-                            });
-                        }
-                        else
-                            sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
-                        break;
-                    case 'changestoptime':       // Change the hour when it stops recording
-                        if (commandArgs[1].match(/^\d{1,2}$/)) {
-                            SLEEP_HOUR_UTC = commandArgs[1];
-
-                            restart6senseIfNeeded()
-                            .then(function () {
-                                sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
-                            })
-                            .catch(function (err) {
-                                console.log('Error in restart6senseIfNeeded :', err);
-                            });
-
-                            stopJob.cancel();
-                            stopJob = schedule.scheduleJob('00 '+ SLEEP_HOUR_UTC + ' * * *', function(){
-                                console.log('Pausing measurements.');
-
-                                wifi.pause();
-                            });
-                        }
-                        else
-                            sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
-                        break;
-                }
-                break;
-
-            case 4:
-                // command with three parameters
-                switch(command) {
-                    case 'opentunnel':           // Open a reverse SSH tunnel
-                        openTunnel(commandArgs[1], commandArgs[2], commandArgs[3])
-                        .then(function(process){
-                            sshProcess = process;
-                            send('cmdResult/'+id, JSON.stringify({command: 'opentunnel', result: 'OK'}));
-                            send('status/'+id+'/client', 'tunnelling');
-                        })
-                        .catch(function(err){
-                            console.log(err.msg);
-                            console.log("Could not make the tunnel. Cleanning...");
-                            send('cmdResult/'+id, JSON.stringify({command: 'opentunnel', result: 'Error : '+err.msg}));
-                        });
-                        break;
-                }
-                break;
-            case 5:
-                // command with three parameters
-                switch(command) {
-                    case 'init':                 // Initialize period, start and stop time
-                        if (commandArgs[1].match(/^\d{1,5}$/) && commandArgs[2].match(/^\d{1,2}$/) && commandArgs[3].match(/^\d{1,2}$/)) {
-
-                            MEASURE_PERIOD = parseInt(commandArgs[1], 10);
-                            WAKEUP_HOUR_UTC = commandArgs[2];
-                            SLEEP_HOUR_UTC = commandArgs[3];
-                            var newDate = commandArgs[4].toUpperCase().replace('T', ' ').split('.')[0];
-
-                            spawn('date', ['-s', newDate]);
-                            
-                            restart6senseIfNeeded()
-                            .then(function(){
-                                sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
-                                debug('init done');
-                            })
-                            .catch(function(){
-                                sendFunction(topic, JSON.stringify({command: command, result: 'Error in restarting 6sense'}));
-                            });
-
-                        }
-                        else {
-                            sendFunction(topic, JSON.stringify({command: command, result: 'Error in arguments'}));
-                            console.log('error in arguments of init');
-                        }
-                        break;
-                }
-                break;
-            default:
-                console.log('Unrecognized command.', commandArgs);
-                break;
-
-
-        }
     }
 }
 
