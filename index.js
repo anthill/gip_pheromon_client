@@ -15,7 +15,7 @@ var id = require('./PRIVATE/id.json').id;
 var MEASURE_PERIOD = 300; // in seconds
 var WAKEUP_HOUR_UTC = '07';
 var SLEEP_HOUR_UTC = '22';
-var SSH_TIMEOUT = 20 * 1000;
+var SSH_TIMEOUT = 60 * 1000;
 // ===
 
 var sshProcess;
@@ -162,7 +162,7 @@ function mqttConnect() {
         var message = buffer.toString();
         console.log("data received :", message, 'destination', destination);
 
-        commandHandler(message, send, 'cmdResult/'+id);
+        commandHandler(message, 'cmdResult/'+id);
     });
 }
 
@@ -200,7 +200,7 @@ function openTunnel(queenPort, antPort, target) {
 
 // COMMAND BLOCK
 
-function commandHandler(fullCommand, sendFunction, topic) { // If a status is sent, his pattern is [command]:[status]
+function commandHandler(fullCommand, topic) { // If a status is sent, his pattern is [command]:[status]
 
     var commandArgs = fullCommand.split(' ');
     var command = (commandArgs.length >= 1) ? commandArgs[0] : undefined;
@@ -211,11 +211,11 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
 
         case 'status':               // Send statuses
             send('status/'+id+'/wifi', wifi.state);
-            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+            send(topic, JSON.stringify({command: command, result: 'OK'}));
             break;
 
         case 'reboot':               // Reboot the system
-            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+            send(topic, JSON.stringify({command: command, result: 'OK'}));
             setTimeout(function () {
                 spawn('reboot');
             }, 1000);
@@ -235,18 +235,34 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                     return reject(err);
                 });
             }).then(function(result){
-                sendFunction(topic, JSON.stringify({command: command, result: result}));
+                send(topic, JSON.stringify({command: command, result: result}));
             }).catch(function(err){
-                sendFunction(topic, JSON.stringify({command: command, result: err}));
+                send(topic, JSON.stringify({command: command, result: err}));
+            });
+            break;
+        case "picture":
+            new Promise(function(resolve, reject){
+                var command = spawn("fswebcam", ["-r", "1280x720", "/tmp/image.jpg"]);
+                command.on('close', function(code) {
+                    return resolve();
+                });
+                command.on('error', function(err) {
+                    return reject(err);
+                });
+            }).then(function(){
+                var image = fs.readFileSync("/tmp/image.jpg");
+                send("image/" + id, image);
+            }).catch(function(err){
+                send(topic, JSON.stringify({command: command, result: err}));
             });
             break;       
         case 'resumerecord':         // Start recording
             wifi.record(MEASURE_PERIOD);
-            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+            send(topic, JSON.stringify({command: command, result: 'OK'}));
             break;
         case 'pauserecord':          // Pause recording
             wifi.pause();
-            sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+            send(topic, JSON.stringify({command: command, result: 'OK'}));
             break;
         case 'closetunnel':          // Close the SSH tunnel
             if (sshProcess)
@@ -265,7 +281,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
 
                 restart6senseIfNeeded()
                 .then(function () {
-                    sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                    send(topic, JSON.stringify({command: command, result: commandArgs[1]}));
                 })
                 .catch(function (err) {
                     console.log('Error in restart6senseIfNeeded :', err);
@@ -273,7 +289,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
 
             } else {
                 console.log('Problem changeperiod ', commandArgs);
-                sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
+                send(topic, JSON.stringify({command: command, result: 'KO'}));
             }
             break;
         case 'changestarttime':      // Change the hour when it starts recording
@@ -282,7 +298,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
 
                 restart6senseIfNeeded()
                 .then(function () {
-                    sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                    send(topic, JSON.stringify({command: command, result: commandArgs[1]}));
                 })
                 .catch(function (err) {
                     console.log('Error in restart6senseIfNeeded :', err);
@@ -298,7 +314,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
             }
             else {
                 console.log('Problem changestarttime', commandArgs);
-                sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
+                send(topic, JSON.stringify({command: command, result: 'KO'}));
             }
             break;
         case 'changestoptime':       // Change the hour when it stops recording
@@ -307,7 +323,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
 
                 restart6senseIfNeeded()
                 .then(function () {
-                    sendFunction(topic, JSON.stringify({command: command, result: commandArgs[1]}));
+                    send(topic, JSON.stringify({command: command, result: commandArgs[1]}));
                 })
                 .catch(function (err) {
                     console.log('Error in restart6senseIfNeeded :', err);
@@ -322,7 +338,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
             }
             else {
                 console.log('Problem changestoptime', commandArgs);
-                sendFunction(topic, JSON.stringify({command: command, result: 'KO'}));
+                send(topic, JSON.stringify({command: command, result: 'KO'}));
             }
             break;
 
@@ -342,7 +358,7 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
             }
             else {
                 console.log('Problem opentunnel', commandArgs);
-                sendFunction(topic, JSON.stringify({command: command, result: 'Error with args'}));
+                send(topic, JSON.stringify({command: command, result: 'Error with args'}));
             }
             break;
 
@@ -359,16 +375,16 @@ function commandHandler(fullCommand, sendFunction, topic) { // If a status is se
                 
                 restart6senseIfNeeded()
                 .then(function(){
-                    sendFunction(topic, JSON.stringify({command: command, result: 'OK'}));
+                    send(topic, JSON.stringify({command: command, result: 'OK'}));
                     debug('init done');
                 })
                 .catch(function(){
-                    sendFunction(topic, JSON.stringify({command: command, result: 'Error in restarting 6sense'}));
+                    send(topic, JSON.stringify({command: command, result: 'Error in restarting 6sense'}));
                 });
 
             }
             else {
-                sendFunction(topic, JSON.stringify({command: command, result: 'Error in arguments'}));
+                send(topic, JSON.stringify({command: command, result: 'Error in arguments'}));
                 console.log('error in arguments of init');
             }
             break;
