@@ -27,12 +27,12 @@ catch (e){
         fs.writeFile(privatePath, JSON.stringify(privateJson), function (error) {
             if (error) console.log('error in writing id.json:', error);
             
-            var hostname = 'ant-' + id;
-            exec('cat /etc/hosts | sed s/ant-xxx/' + hostname + '/ > /tmp/hosts.tmp && mv /tmp/hosts.tmp /etc/hosts', function() {
-                exec('hostnamectl set-hostname ' + hostname, function () {
-                    exec('echo "' + hostname + '" > /etc/hostname', process.exit);
-                });
-            });
+            // var hostname = 'ant-' + id;
+            // exec('cat /etc/hosts | sed s/ant-xxx/' + hostname + '/ > /tmp/hosts.tmp && mv /tmp/hosts.tmp /etc/hosts', function() {
+            //     exec('hostnamectl set-hostname ' + hostname, function () {
+            //         exec('echo "' + hostname + '" > /etc/hostname', process.exit);
+            //     });
+            // });
         });
     });
 }
