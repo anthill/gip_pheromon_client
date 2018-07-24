@@ -112,11 +112,11 @@ wifi.on('processed', function (results) {
 });
 
 wifi.on('macDetected', function (results) {
-    var payload = JSON.stringify([{
+    var payload = JSON.stringify({
         address: results.mac_address,
         date: new Date().toISOString(),
         signal: results.signal_strength
-    }]);
+    });
     send('measurement/'+id+'/tracking', payload, {qos: 1});
 });
 
@@ -234,7 +234,6 @@ function commandHandler(fullCommand, topic) { // If a status is sent, his patter
         case 'start_tracking':     // register MAC address
             var macadd = commandArgs[1]
             wifi.trackAddress(macadd)
-            send(topic, JSON.stringify({command: command, result: 'OK'}));
             break;
 
         case "execute":
