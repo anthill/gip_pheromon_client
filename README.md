@@ -20,3 +20,7 @@ apt-get install -y python
 
 
 mosquitto_passwd -c /etc/mosquitto/passwd gip
+
+
+opentunnel 2200 22 sensorSSH@172.104.151.151
+ssh -l root -p 2200 -o StrictHostKeyChecking=no localhost

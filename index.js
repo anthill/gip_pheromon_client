@@ -5,7 +5,7 @@ var spawn = require('child_process').spawn;
 var schedule = require('node-schedule');
 var fs = require('fs');
 
-var wifi = require('6sense').wifi();
+var wifi = require('6sense')();
 
 var PRIVATE = require('./PRIVATE/common.json');
 var id = require('./PRIVATE/id.json').id;
@@ -23,6 +23,7 @@ var client;
 var inited = false;
 var startJob;
 var stopJob;
+var MacAddresses = []
 
 // Debug logger
 var DEBUG = process.env.DEBUG || false;
@@ -110,6 +111,15 @@ wifi.on('processed', function (results) {
     send('measurement/'+id+'/measurement', payload, {qos: 1});
 });
 
+wifi.on('macDetected', function (results) {
+    var payload = JSON.stringify([{
+        address: results.mac_address,
+        date: new Date().toISOString(),
+        signal: results.signal_strength
+    }]);
+    send('measurement/'+id+'/tracking', payload, {qos: 1});
+});
+
 wifi.on('transition', function (status){
     send('status/'+id+'/wifi', status.toState);
     debug('wifi status sent :', status.toState);
@@ -133,7 +143,7 @@ function mqttConnect() {
 
     client = mqtt.connect('mqtt://' + PRIVATE.host + ':' + PRIVATE.port,
         {
-            username: "gip",
+            username: "lyre",
             password: PRIVATE.mqttToken,
             clientId: id,
             keepalive: 10,
@@ -144,7 +154,7 @@ function mqttConnect() {
 
     client.on('connect', function(){
         console.log('connected to the server. ID :', id);
-        client.subscribe('all', {qos: 1});
+        client.subscribe('all/#', {qos: 1});
         client.subscribe(id + '/#', {qos: 1});
         if (!inited) {
             send('init/' + id, '');
@@ -219,6 +229,12 @@ function commandHandler(fullCommand, topic) { // If a status is sent, his patter
             setTimeout(function () {
                 spawn('reboot');
             }, 1000);
+            break;
+
+        case 'start_tracking':     // register MAC address
+            var macadd = commandArgs[1]
+            wifi.trackAddress(macadd)
+            send(topic, JSON.stringify({command: command, result: 'OK'}));
             break;
 
         case "execute":
